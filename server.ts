@@ -12,12 +12,21 @@ import { GoogleGenAI, Type } from "@google/genai";
 
 dotenv.config();
 
+// Critical Env Checks
+const requiredEnv = ['MONGO_URI', 'GEMINI_API_KEY'];
+const missingEnv = requiredEnv.filter(k => !process.env[k]);
+if (missingEnv.length > 0) {
+  console.error(`CRITICAL: Missing environment variables: ${missingEnv.join(', ')}`);
+}
+
+const JWT_SECRET = process.env.JWT_SECRET || 'EduQuiz-default-secret-change-me';
+const APP_URL = process.env.APP_URL || 'http://localhost:3000';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3000;
-const JWT_SECRET = process.env.JWT_SECRET || 'your-default-secret';
 
 // Gemini AI Setup
 const ai = process.env.GEMINI_API_KEY 
@@ -26,6 +35,16 @@ const ai = process.env.GEMINI_API_KEY
 
 app.use(cors());
 app.use(express.json());
+
+// Logging Middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} ${res.statusCode} - ${duration}ms`);
+  });
+  next();
+});
 
 // MongoDB Models
 const UserSchema = new mongoose.Schema({
@@ -82,10 +101,16 @@ const authenticateToken = (req: any, res: any, next: any) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
-  if (!token) return res.sendStatus(401);
+  if (!token) {
+    console.warn('Auth failed: No token provided');
+    return res.status(401).json({ message: 'Authentication required' });
+  }
 
   jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
-    if (err) return res.sendStatus(403);
+    if (err) {
+      console.error('Auth failed: Token verification error', err.message);
+      return res.status(403).json({ message: 'Invalid or expired token', error: err.message });
+    }
     req.user = user;
     next();
   });
@@ -462,10 +487,14 @@ app.post('/api/quizzes', authenticateToken, async (req: any, res) => {
     });
     
     await quiz.save();
+    console.log(`Quiz created successfully: ${quiz._id} (${quizSlug})`);
     res.status(201).json({ ...quiz.toObject(), id: quiz._id.toString() });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error creating quiz:', error);
-    res.status(500).json({ message: "Error creating quiz" });
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ message: "Quiz validation failed", errors: error.errors });
+    }
+    res.status(500).json({ message: "Error creating quiz", error: error.message });
   }
 });
 
@@ -714,10 +743,14 @@ app.post('/api/attempts', async (req: any, res) => {
     });
     
     await attempt.save();
+    console.log(`Attempt recorded: Quiz=${quizId}, Student=${studentName}, Score=${score}`);
     res.status(201).json({ ...attempt.toObject(), id: attempt._id });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error saving attempt:', error);
-    res.status(500).json({ message: "Error saving attempt" });
+    if (error.code === 11000) {
+      return res.status(409).json({ message: "An attempt with this roll number already exists for this quiz." });
+    }
+    res.status(500).json({ message: "Error saving attempt", error: error.message });
   }
 });
 
@@ -759,10 +792,26 @@ async function startServer() {
     // Serving built production files from /dist
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
+    
+    // Explicit 404 for API routes that weren't caught
+    app.get('/api/*', (req, res) => {
+      res.status(404).json({ message: 'API route not found' });
+    });
+
+    // Fallback for SPA routing
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // Global Error Handler
+  app.use((err: any, req: any, res: any, next: any) => {
+    console.error('Unhandled Server Error:', err);
+    res.status(err.status || 500).json({
+      message: err.message || 'Internal Server Error',
+      error: process.env.NODE_ENV === 'development' ? err : undefined
+    });
+  });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);

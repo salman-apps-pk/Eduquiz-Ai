@@ -30,8 +30,16 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
 
   useEffect(() => {
     const handleOAuthMessage = (event: MessageEvent) => {
-      // Validate origin - either local or run.app
-      if (!event.origin.includes('localhost') && !event.origin.endsWith('.run.app')) return;
+      // Validate origin - we only care about messages from our own domain 
+      // (where the callback happened)
+      if (
+        event.origin !== window.location.origin && 
+        !event.origin.includes('localhost') && 
+        !event.origin.endsWith('.run.app')
+      ) {
+        console.warn('Blocked message from untrusted origin:', event.origin);
+        return;
+      }
 
       if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
         const { token, user } = event.data.data;

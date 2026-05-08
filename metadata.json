@@ -1,0 +1,6 @@
+{
+  "name": "EduQuiz Ai",
+  "description": "An AI-powered platform that automatically generates quizzes from uploaded course content and provides intelligent feedback to students.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
